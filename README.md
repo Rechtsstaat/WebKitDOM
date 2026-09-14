@@ -15,11 +15,12 @@ WebKitDOM is a low-level Swift Package, not a site automation service. Your app 
 - [Errors and verification](#errors-and-verification)
 - [What it does not do](#what-it-does-not-do)
 - [Tests](#tests)
+- [License](#license)
 
 ## Requirements
 
 - iOS 15+ or macOS 12+
-- Swift 6 and WebKit
+- Swift 6.3 or later and WebKit
 - An existing `WKWebView` with a loaded main document you can interact with
 
 The SwiftUI Observation example below requires iOS 17+, but the package API does not.
@@ -233,3 +234,7 @@ xcodebuild test -scheme WebKitDOM -destination 'platform=iOS Simulator,name=iPho
 ```
 
 The iOS Simulator run passed all 14 tests on an iPhone 17 simulator with iOS 26.5 (2026-09-14). The tests include logger correlation, failure codes, privacy defaults, opt-in selectors, and disabled logging. This does not establish behavior on iOS 15, physical devices, or production websites; those require separate testing. The macOS test run requires an environment that permits WebKit's web content process.
+
+## License
+
+WebKitDOM is available under the MIT License. See [LICENSE](LICENSE).
