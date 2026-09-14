@@ -181,12 +181,113 @@ struct WebKitDOMTests {
         }
     }
 
-    private func makeSession(html: String) async throws -> (WKWebView, DOMSession) {
+    @Test func recordsCorrelatedOperationEventsWithoutPrivateValues() async throws {
+        let recorder = RecordingDOMLogger()
+        let (_, session) = try await makeSession(html: """
+            <section id="choices"><button>남향</button></section>
+            <input id="title"><select id="type"><option value="house">주택</option></select>
+            <input id="parking" type="checkbox"><input id="photo" type="file">
+            <button id="next">다음</button>
+            """, logger: recorder, minimumLogLevel: .debug)
+        try await session.waitForElement("#title")
+        try await session.fill("#title", with: "private listing value")
+        try await session.select("#type", value: "house")
+        try await session.setChecked("#parking", to: true)
+        try await session.click("#next")
+        try await session.clickElement(matchingText: "남향", in: "#choices")
+        try await session.attachImages(
+            [DOMImage(data: Data([1, 2]), fileName: "private-photo.png", mimeType: "image/png")],
+            to: "#photo"
+        )
+        _ = try await session.value(of: "#title")
+        _ = try await session.matchesValue("private listing value", at: "#title")
+
+        #expect(recorder.events.count == 18)
+        let operations = Set(recorder.events.map { $0.operation.rawValue })
+        #expect(operations == Set(DOMLogOperation.allCases.map(\.rawValue)))
+        #expect(recorder.events.allSatisfy { $0.selector == nil && $0.errorCode == nil })
+        #expect(recorder.events.allSatisfy { $0.phase == .started || ($0.phase == .succeeded && $0.durationMilliseconds != nil) })
+        let ids = Set(recorder.events.map(\.id))
+        #expect(ids.count == 9)
+        #expect(ids.allSatisfy { id in recorder.events.filter { $0.id == id }.count == 2 })
+    }
+
+    @Test func logsFailureCodeWithoutChangingThrownError() async throws {
+        let recorder = RecordingDOMLogger()
+        let (_, session) = try await makeSession(html: "<main></main>", logger: recorder)
+        try await session.click("main")
+        #expect(recorder.events.isEmpty)
+        await #expect(throws: DOMError.elementNotFound("#missing")) {
+            try await session.fill("#missing", with: "secret")
+        }
+        #expect(recorder.events.count == 1)
+        #expect(recorder.events.first?.operation == .fill)
+        #expect(recorder.events.first?.phase == .failed)
+        #expect(recorder.events.first?.errorCode == "elementNotFound")
+        #expect(recorder.events.first?.selector == nil)
+        #expect(recorder.events.first?.durationMilliseconds != nil)
+    }
+
+    @Test func canDisableOrOptInToSelectorLogging() async throws {
+        let recorder = RecordingDOMLogger()
+        let (_, disabledSession) = try await makeSession(html: "<button id='next'>Next</button>", logger: nil, minimumLogLevel: .debug)
+        try await disabledSession.click("#next")
+        #expect(recorder.events.isEmpty)
+
+        let (_, enabledSession) = try await makeSession(
+            html: "<button id='next'>Next</button>",
+            logger: recorder,
+            minimumLogLevel: .debug,
+            includeSelectorsInLogs: true
+        )
+        try await enabledSession.click("#next")
+        #expect(recorder.events.map(\.selector) == ["#next", "#next"])
+    }
+
+    @Test func logsSelectorTimeoutAndJavaScriptFailures() async throws {
+        let recorder = RecordingDOMLogger()
+        let (_, session) = try await makeSession(html: """
+            <button id="broken">Broken</button>
+            <script>document.querySelector('#broken').click = () => { throw new Error('private details') }</script>
+            """, logger: recorder)
+        await #expect(throws: DOMError.invalidSelector("[")) {
+            try await session.click("[")
+        }
+        await #expect(throws: DOMError.timedOut("#late")) {
+            try await session.waitForElement("#late", timeout: 0.05)
+        }
+        await #expect(throws: DOMError.self) {
+            try await session.click("#broken")
+        }
+        #expect(recorder.events.map(\.errorCode) == ["invalidSelector", "timedOut", "executionFailed"])
+        #expect(recorder.events.allSatisfy { $0.selector == nil && $0.phase == .failed })
+    }
+
+    private func makeSession(
+        html: String,
+        logger: (any DOMEventLogger)? = UnifiedDOMLogger(),
+        minimumLogLevel: DOMLogLevel = .error,
+        includeSelectorsInLogs: Bool = false
+    ) async throws -> (WKWebView, DOMSession) {
         let webView = WKWebView()
         let loader = PageLoader()
         webView.navigationDelegate = loader
         try await loader.load(html, in: webView)
-        return (webView, DOMSession(webView: webView))
+        return (webView, DOMSession(
+            webView: webView,
+            logger: logger,
+            minimumLogLevel: minimumLogLevel,
+            includeSelectorsInLogs: includeSelectorsInLogs
+        ))
+    }
+}
+
+@MainActor
+private final class RecordingDOMLogger: DOMEventLogger {
+    private(set) var events: [DOMLogEvent] = []
+
+    func log(_ event: DOMLogEvent) {
+        events.append(event)
     }
 }
 
