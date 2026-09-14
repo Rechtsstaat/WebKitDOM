@@ -23,30 +23,51 @@ public enum DOMError: Error, Equatable, Sendable {
 @MainActor
 public final class DOMSession {
     private let webView: WKWebView
+    private let logger: (any DOMEventLogger)?
+    private let minimumLogLevel: DOMLogLevel
+    private let includeSelectorsInLogs: Bool
 
-    public init(webView: WKWebView) {
+    public init(
+        webView: WKWebView,
+        logger: (any DOMEventLogger)? = UnifiedDOMLogger(),
+        minimumLogLevel: DOMLogLevel = .error,
+        includeSelectorsInLogs: Bool = false
+    ) {
         self.webView = webView
+        self.logger = logger
+        self.minimumLogLevel = minimumLogLevel
+        self.includeSelectorsInLogs = includeSelectorsInLogs
     }
 
     public func waitForElement(_ selector: String, timeout: TimeInterval = 10) async throws {
-        let milliseconds = try validatedMilliseconds(for: timeout)
-        _ = try await perform("wait", selector: selector, milliseconds: milliseconds)
+        try await logged(.waitForElement, selector: selector) {
+            let milliseconds = try validatedMilliseconds(for: timeout)
+            _ = try await perform("wait", selector: selector, milliseconds: milliseconds)
+        }
     }
 
     public func fill(_ selector: String, with value: String) async throws {
-        _ = try await perform("fill", selector: selector, value: value)
+        try await logged(.fill, selector: selector) {
+            _ = try await perform("fill", selector: selector, value: value)
+        }
     }
 
     public func select(_ selector: String, value: String) async throws {
-        _ = try await perform("select", selector: selector, value: value)
+        try await logged(.select, selector: selector) {
+            _ = try await perform("select", selector: selector, value: value)
+        }
     }
 
     public func setChecked(_ selector: String, to checked: Bool) async throws {
-        _ = try await perform("check", selector: selector, checked: checked)
+        try await logged(.setChecked, selector: selector) {
+            _ = try await perform("check", selector: selector, checked: checked)
+        }
     }
 
     public func click(_ selector: String) async throws {
-        _ = try await perform("click", selector: selector)
+        try await logged(.click, selector: selector) {
+            _ = try await perform("click", selector: selector)
+        }
     }
 
     /// Clicks one element whose trimmed text exactly matches within one container.
@@ -56,35 +77,105 @@ public final class DOMSession {
         elementSelector: String = "button",
         timeout: TimeInterval = 10
     ) async throws {
-        guard !text.isEmpty else { throw DOMError.invalidValue("Target text must not be empty") }
-        let milliseconds = try validatedMilliseconds(for: timeout)
-        _ = try await perform(
-            "clickText",
-            selector: containerSelector,
-            milliseconds: milliseconds,
-            targetText: text,
-            targetSelector: elementSelector
-        )
+        try await logged(.clickElement, selector: containerSelector) {
+            guard !text.isEmpty else { throw DOMError.invalidValue("Target text must not be empty") }
+            let milliseconds = try validatedMilliseconds(for: timeout)
+            _ = try await perform(
+                "clickText",
+                selector: containerSelector,
+                milliseconds: milliseconds,
+                targetText: text,
+                targetSelector: elementSelector
+            )
+        }
     }
 
     /// Replaces the files of a native file input and dispatches input/change events.
     public func attachImages(_ images: [DOMImage], to selector: String) async throws {
-        guard !images.isEmpty,
-              images.allSatisfy({ !$0.data.isEmpty && !$0.fileName.isEmpty && !$0.fileName.contains("/") && !$0.fileName.contains("\\") && $0.mimeType.hasPrefix("image/") }) else {
-            throw DOMError.invalidValue("Provide nonempty image data, a simple file name, and an image MIME type")
+        try await logged(.attachImages, selector: selector) {
+            guard !images.isEmpty,
+                  images.allSatisfy({ !$0.data.isEmpty && !$0.fileName.isEmpty && !$0.fileName.contains("/") && !$0.fileName.contains("\\") && $0.mimeType.hasPrefix("image/") }) else {
+                throw DOMError.invalidValue("Provide nonempty image data, a simple file name, and an image MIME type")
+            }
+            let payload = images.map { image in
+                ["base64": image.data.base64EncodedString(), "fileName": image.fileName, "mimeType": image.mimeType]
+            }
+            _ = try await perform("attachImages", selector: selector, images: payload)
         }
-        let payload = images.map { image in
-            ["base64": image.data.base64EncodedString(), "fileName": image.fileName, "mimeType": image.mimeType]
-        }
-        _ = try await perform("attachImages", selector: selector, images: payload)
     }
 
     public func value(of selector: String) async throws -> String {
-        try await perform("value", selector: selector)
+        try await logged(.value, selector: selector) {
+            try await perform("value", selector: selector)
+        }
     }
 
     public func matchesValue(_ expected: String, at selector: String) async throws -> Bool {
-        try await value(of: selector) == expected
+        try await logged(.matchesValue, selector: selector) {
+            try await perform("value", selector: selector) == expected
+        }
+    }
+
+    private func logged<Result>(
+        _ operation: DOMLogOperation,
+        selector: String,
+        perform body: () async throws -> Result
+    ) async throws -> Result {
+        let id = UUID()
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        emit(id: id, operation: operation, phase: .started, level: .debug, selector: selector)
+        do {
+            let result = try await body()
+            let duration = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+            emit(id: id, operation: operation, phase: .succeeded, level: .debug, selector: selector, duration: duration)
+            return result
+        } catch {
+            let duration = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+            let code: String
+            if let domError = error as? DOMError {
+                code = Self.errorCode(for: domError)
+            } else if error is CancellationError {
+                code = "cancelled"
+            } else {
+                code = "unexpectedError"
+            }
+            emit(id: id, operation: operation, phase: .failed, level: .error, selector: selector, duration: duration, errorCode: code)
+            throw error
+        }
+    }
+
+    private func emit(
+        id: UUID,
+        operation: DOMLogOperation,
+        phase: DOMLogPhase,
+        level: DOMLogLevel,
+        selector: String,
+        duration: Int? = nil,
+        errorCode: String? = nil
+    ) {
+        guard level.rawValue >= minimumLogLevel.rawValue else { return }
+        logger?.log(DOMLogEvent(
+            id: id,
+            operation: operation,
+            phase: phase,
+            level: level,
+            selector: includeSelectorsInLogs ? selector : nil,
+            durationMilliseconds: duration,
+            errorCode: errorCode
+        ))
+    }
+
+    private static func errorCode(for error: DOMError) -> String {
+        switch error {
+        case .invalidSelector: "invalidSelector"
+        case .elementNotFound: "elementNotFound"
+        case .ambiguousSelector: "ambiguousSelector"
+        case .unsupportedElement: "unsupportedElement"
+        case .invalidValue: "invalidValue"
+        case .verificationFailed: "verificationFailed"
+        case .timedOut: "timedOut"
+        case .executionFailed: "executionFailed"
+        }
     }
 
     private func validatedMilliseconds(for timeout: TimeInterval) throws -> Int {
@@ -124,6 +215,8 @@ public final class DOMSession {
                 in: nil,
                 contentWorld: .page
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw DOMError.executionFailed(error.localizedDescription)
         }
