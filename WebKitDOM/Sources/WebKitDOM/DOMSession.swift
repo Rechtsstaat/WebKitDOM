@@ -29,10 +29,7 @@ public final class DOMSession {
     }
 
     public func waitForElement(_ selector: String, timeout: TimeInterval = 10) async throws {
-        guard timeout.isFinite, timeout >= 0, timeout <= Double(Int32.max) / 1_000 else {
-            throw DOMError.invalidValue("Timeout must be between 0 and \(Double(Int32.max) / 1_000) seconds")
-        }
-        let milliseconds = Int(timeout * 1_000)
+        let milliseconds = try validatedMilliseconds(for: timeout)
         _ = try await perform("wait", selector: selector, milliseconds: milliseconds)
     }
 
@@ -50,6 +47,24 @@ public final class DOMSession {
 
     public func click(_ selector: String) async throws {
         _ = try await perform("click", selector: selector)
+    }
+
+    /// Clicks one element whose trimmed text exactly matches within one container.
+    public func clickElement(
+        matchingText text: String,
+        in containerSelector: String,
+        elementSelector: String = "button",
+        timeout: TimeInterval = 10
+    ) async throws {
+        guard !text.isEmpty else { throw DOMError.invalidValue("Target text must not be empty") }
+        let milliseconds = try validatedMilliseconds(for: timeout)
+        _ = try await perform(
+            "clickText",
+            selector: containerSelector,
+            milliseconds: milliseconds,
+            targetText: text,
+            targetSelector: elementSelector
+        )
     }
 
     /// Replaces the files of a native file input and dispatches input/change events.
@@ -72,13 +87,22 @@ public final class DOMSession {
         try await value(of: selector) == expected
     }
 
+    private func validatedMilliseconds(for timeout: TimeInterval) throws -> Int {
+        guard timeout.isFinite, timeout >= 0, timeout <= Double(Int32.max) / 1_000 else {
+            throw DOMError.invalidValue("Timeout must be between 0 and \(Double(Int32.max) / 1_000) seconds")
+        }
+        return Int(timeout * 1_000)
+    }
+
     private func perform(
         _ operation: String,
         selector: String,
         value: String = "",
         checked: Bool = false,
         milliseconds: Int = 0,
-        images: [[String: String]] = []
+        images: [[String: String]] = [],
+        targetText: String = "",
+        targetSelector: String = "button"
     ) async throws -> String {
         try Task.checkCancellation()
         let arguments: [String: Any] = [
@@ -87,7 +111,9 @@ public final class DOMSession {
             "value": value,
             "checked": checked,
             "milliseconds": milliseconds,
-            "images": images
+            "images": images,
+            "targetText": targetText,
+            "targetSelector": targetSelector
         ]
 
         let rawResult: Any?
@@ -131,6 +157,39 @@ public final class DOMSession {
     };
     let elements = find();
     if (elements === null) return fail('invalidSelector', selector);
+
+    if (operation === 'clickText') {
+      if (elements.length === 0) return fail('elementNotFound', selector);
+      if (elements.length !== 1) return fail('ambiguousSelector', selector);
+      const container = elements[0];
+      try { container.querySelectorAll(targetSelector); }
+      catch (error) { return fail('invalidSelector', targetSelector); }
+      const matches = () => Array.from(container.querySelectorAll(targetSelector))
+        .filter(element => element.textContent.trim() === targetText);
+      const choose = candidates => {
+        if (candidates.length !== 1) return fail('ambiguousSelector', targetText);
+        candidates[0].click();
+        return { ok: true };
+      };
+      const initial = matches();
+      if (initial.length > 0) return choose(initial);
+      return await new Promise(resolve => {
+        let timer;
+        const observer = new MutationObserver(() => {
+          const candidates = matches();
+          if (candidates.length > 0) {
+            observer.disconnect();
+            clearTimeout(timer);
+            resolve(choose(candidates));
+          }
+        });
+        observer.observe(container, { childList: true, subtree: true, characterData: true });
+        timer = setTimeout(() => {
+          observer.disconnect();
+          resolve(fail('timedOut', targetText));
+        }, milliseconds);
+      });
+    }
 
     if (operation === 'wait') {
       if (elements.length > 0) return { ok: true };
