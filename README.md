@@ -1,6 +1,8 @@
 # WebKitDOM
 A Swift package for interacting with and verifying DOM elements in WKWebView.
 
+WebKitDOM works with a `WKWebView` your app already owns. It does not create a web view, navigate to a site, or store login credentials. The app remains responsible for the web view's `WKWebsiteDataStore` and cookie policy.
+
 ## Public API
 
 `DOMSession` wraps an existing `WKWebView`. The app owns the web view and its navigation; the package handles small, verifiable DOM operations.
@@ -19,7 +21,50 @@ let matches = try await session.matchesValue("Sunny studio", at: "input[name=tit
 
 The operations are `async`, main-actor isolated, and throw `DOMError` on failure. Selectors must match exactly one element. `waitForElement` waits for at least one match without a fixed sleep. `fill`, `select`, and `setChecked` verify the resulting DOM state.
 
+### SwiftUI example
+
+Keep the same `WKWebView` instance while presenting and dismissing its SwiftUI wrapper. Create the session from that instance after the page has loaded. This example uses Observation and therefore requires iOS 17 or later; the package itself supports iOS 15 or later:
+
+```swift
+import SwiftUI
+import Observation
+import WebKit
+import WebKitDOM
+
+@MainActor
+@Observable
+final class ListingBrowser {
+    let webView = WKWebView()
+
+    func fillListing() async throws {
+        let dom = DOMSession(webView: webView)
+        try await dom.waitForElement("input[name=title]")
+        try await dom.fill("input[name=title]", with: "Sunny studio")
+        try await dom.fill("textarea[name=description]", with: "Near transit")
+        // Leave final submission to the user or explicit app-level workflow.
+    }
+}
+
+struct ListingPage: UIViewRepresentable {
+    let browser: ListingBrowser
+
+    func makeUIView(context: Context) -> WKWebView { browser.webView }
+    func updateUIView(_ view: WKWebView, context: Context) {}
+}
+```
+
+Use `WKWebsiteDataStore.default()` (the default for `WKWebView`) when you want normal persistent website data; a nonpersistent data store will not retain cookies across sessions. Keeping the same web view also preserves the currently loaded page when SwiftUI redraws the wrapper. Login persistence across app launches still depends on each site's cookie lifetime and login policy.
+
+### Error and verification behavior
+
+- Invalid, missing, and non-unique CSS selectors have distinct `DOMError` cases.
+- `fill` supports text inputs and textareas, `select` supports native `<select>`, and `setChecked` supports checkboxes and radio buttons.
+- Input operations dispatch bubbling `input` and `change` events, then read back the DOM value. `waitForElement` uses `MutationObserver` and throws `timedOut` when necessary.
+- A JavaScript or navigation failure becomes `executionFailed`. The app should wait for the correct page before invoking the session and re-check after navigation.
+
 The package does not navigate particular sites, automate custom Radix-style dropdowns, access cross-origin iframe DOM, upload files, or submit forms. Site-specific selectors, conditional input order, and value mapping belong in an app-level adapter. A DOM value match does not by itself prove that a site's framework or server accepted a change.
+
+Run the macOS integration tests with `swift test`. They load a real `WKWebView` and cover text/event dispatch, select, checkbox, click, dynamic elements, and error cases. They require a macOS environment that permits WebKit's web content process.
 
 ## Requirements
 
