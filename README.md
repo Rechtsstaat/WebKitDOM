@@ -13,6 +13,10 @@ try await session.waitForElement("input[name=title]")
 try await session.fill("input[name=title]", with: "Sunny studio")
 try await session.select("select[name=direction]", value: "SOUTH")
 try await session.setChecked("input[name=parking]", to: true)
+try await session.attachImages(
+    [DOMImage(data: photoData, fileName: "room.jpg", mimeType: "image/jpeg")],
+    to: "input[type=file][name=photos]"
+)
 try await session.click("button[name=next]")
 
 let title = try await session.value(of: "input[name=title]")
@@ -43,6 +47,15 @@ final class ListingBrowser {
         try await dom.fill("textarea[name=description]", with: "Near transit")
         // Leave final submission to the user or explicit app-level workflow.
     }
+
+    func attachPhoto(_ data: Data) async throws {
+        let dom = DOMSession(webView: webView)
+        try await dom.waitForElement("input[type=file][name=photos]")
+        try await dom.attachImages(
+            [DOMImage(data: data, fileName: "room.jpg", mimeType: "image/jpeg")],
+            to: "input[type=file][name=photos]"
+        )
+    }
 }
 
 struct ListingPage: UIViewRepresentable {
@@ -60,11 +73,12 @@ Use `WKWebsiteDataStore.default()` (the default for `WKWebView`) when you want n
 - Invalid, missing, and non-unique CSS selectors have distinct `DOMError` cases.
 - `fill` supports text inputs and textareas, `select` supports native `<select>`, and `setChecked` supports checkboxes and radio buttons.
 - Input operations dispatch bubbling `input` and `change` events, then read back the DOM value. `waitForElement` uses `MutationObserver` and throws `timedOut` when necessary.
+- `attachImages` creates browser `File` objects from image bytes, assigns them to a native `<input type="file">`, dispatches `input`/`change`, and checks file metadata. The caller supplies the image bytes, for example from PhotosPicker. More than one image requires a `multiple` file input.
 - A JavaScript or navigation failure becomes `executionFailed`. The app should wait for the correct page before invoking the session and re-check after navigation.
 
-The package does not navigate particular sites, automate custom Radix-style dropdowns, access cross-origin iframe DOM, upload files, or submit forms. Site-specific selectors, conditional input order, and value mapping belong in an app-level adapter. A DOM value match does not by itself prove that a site's framework or server accepted a change.
+The package does not navigate particular sites, automate custom Radix-style dropdowns, access cross-origin iframe DOM, or submit forms. It attaches images to native file inputs but does not guarantee upload to a server. Some sites require a genuine user-initiated file selection, reject untrusted events, or use custom upload components; those flows need site-specific handling. Site-specific selectors, conditional input order, and value mapping belong in an app-level adapter. A DOM value match does not by itself prove that a site's framework or server accepted a change.
 
-Run the macOS integration tests with `swift test`. They load a real `WKWebView` and cover text/event dispatch, select, checkbox, click, dynamic elements, and error cases. They require a macOS environment that permits WebKit's web content process.
+Run the macOS integration tests with `swift test`. They load a real `WKWebView` and cover text/event dispatch, select, checkbox, click, image file inputs, dynamic elements, and error cases. They require a macOS environment that permits WebKit's web content process. iOS WebKit behavior and real-site uploads still require separate device/site testing.
 
 ## Requirements
 

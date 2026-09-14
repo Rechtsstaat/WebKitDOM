@@ -6,6 +6,7 @@
 //
 
 import Testing
+import Foundation
 import WebKit
 @testable import WebKitDOM
 
@@ -70,6 +71,41 @@ struct WebKitDOMTests {
         await #expect(throws: DOMError.unsupportedElement("#type")) { try await session.fill("#type", with: "x") }
         await #expect(throws: DOMError.invalidValue("other")) { try await session.select("#type", value: "other") }
         await #expect(throws: DOMError.timedOut("#missing")) { try await session.waitForElement("#missing", timeout: 0.05) }
+    }
+
+    @Test func attachesImagesToFileInput() async throws {
+        let (webView, session) = try await makeSession(html: """
+            <input id="photos" type="file" accept="image/*" multiple>
+            <output id="events"></output>
+            <script>
+              document.querySelector('#photos').addEventListener('change', event => {
+                document.querySelector('#events').textContent = Array.from(event.target.files).map(file => file.name).join(',');
+              });
+            </script>
+            """)
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII="))
+        let image = DOMImage(data: png, fileName: "room.png", mimeType: "image/png")
+        let secondImage = DOMImage(data: png, fileName: "kitchen.png", mimeType: "image/png")
+        try await session.attachImages([image, secondImage], to: "#photos")
+        #expect(try await webView.evaluateJavaScript("document.querySelector('#photos').files[0].name") as? String == "room.png")
+        #expect(try await webView.evaluateJavaScript("document.querySelector('#photos').files.length") as? Int == 2)
+        #expect(try await webView.evaluateJavaScript("document.querySelector('#photos').files[0].size") as? Int == png.count)
+        #expect(try await webView.evaluateJavaScript("document.querySelector('#events').textContent") as? String == "room.png,kitchen.png")
+        let copiedBytes = try await webView.callAsyncJavaScript(
+            "return Array.from(new Uint8Array(await document.querySelector('#photos').files[0].arrayBuffer())).join(',')",
+            arguments: [:],
+            in: nil,
+            contentWorld: .page
+        ) as? String
+        #expect(copiedBytes == png.map(String.init).joined(separator: ","))
+    }
+
+    @Test func rejectsMultipleImagesForSingleFileInput() async throws {
+        let (_, session) = try await makeSession(html: "<input id='photo' type='file'>")
+        let image = DOMImage(data: Data([1]), fileName: "room.png", mimeType: "image/png")
+        await #expect(throws: DOMError.invalidValue("File input does not allow multiple files")) {
+            try await session.attachImages([image, image], to: "#photo")
+        }
     }
 
     private func makeSession(html: String) async throws -> (WKWebView, DOMSession) {

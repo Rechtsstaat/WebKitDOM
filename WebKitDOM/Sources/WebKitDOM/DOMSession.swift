@@ -52,6 +52,18 @@ public final class DOMSession {
         _ = try await perform("click", selector: selector)
     }
 
+    /// Replaces the files of a native file input and dispatches input/change events.
+    public func attachImages(_ images: [DOMImage], to selector: String) async throws {
+        guard !images.isEmpty,
+              images.allSatisfy({ !$0.data.isEmpty && !$0.fileName.isEmpty && !$0.fileName.contains("/") && !$0.fileName.contains("\\") && $0.mimeType.hasPrefix("image/") }) else {
+            throw DOMError.invalidValue("Provide nonempty image data, a simple file name, and an image MIME type")
+        }
+        let payload = images.map { image in
+            ["base64": image.data.base64EncodedString(), "fileName": image.fileName, "mimeType": image.mimeType]
+        }
+        _ = try await perform("attachImages", selector: selector, images: payload)
+    }
+
     public func value(of selector: String) async throws -> String {
         try await perform("value", selector: selector)
     }
@@ -65,7 +77,8 @@ public final class DOMSession {
         selector: String,
         value: String = "",
         checked: Bool = false,
-        milliseconds: Int = 0
+        milliseconds: Int = 0,
+        images: [[String: String]] = []
     ) async throws -> String {
         try Task.checkCancellation()
         let arguments: [String: Any] = [
@@ -73,7 +86,8 @@ public final class DOMSession {
             "selector": selector,
             "value": value,
             "checked": checked,
-            "milliseconds": milliseconds
+            "milliseconds": milliseconds,
+            "images": images
         ]
 
         let rawResult: Any?
@@ -147,6 +161,26 @@ public final class DOMSession {
       if (element.type === 'radio' && !checked) return fail('invalidValue', 'A radio button cannot be unchecked directly');
       if (element.checked !== checked) element.click();
       if (element.checked !== checked) return fail('verificationFailed', selector);
+      return { ok: true };
+    }
+    if (operation === 'attachImages') {
+      if (!(element instanceof HTMLInputElement) || element.type !== 'file' || element.disabled) {
+        return fail('unsupportedElement', selector);
+      }
+      if (images.length > 1 && !element.multiple) return fail('invalidValue', 'File input does not allow multiple files');
+      const transfer = new DataTransfer();
+      for (const image of images) {
+        const bytes = Uint8Array.from(atob(image.base64), character => character.charCodeAt(0));
+        transfer.items.add(new File([bytes], image.fileName, { type: image.mimeType }));
+      }
+      element.files = transfer.files;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      const attached = Array.from(element.files || []);
+      if (attached.length !== images.length || attached.some((file, index) =>
+        file.name !== images[index].fileName || file.size !== atob(images[index].base64).length || file.type !== images[index].mimeType)) {
+        return fail('verificationFailed', selector);
+      }
       return { ok: true };
     }
     if (operation === 'value') {
