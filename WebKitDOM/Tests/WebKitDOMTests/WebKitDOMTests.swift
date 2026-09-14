@@ -120,6 +120,21 @@ struct WebKitDOMTests {
         #expect(try await webView.evaluateJavaScript("document.body.dataset.clicked") as? String == "inside")
     }
 
+    @Test func supportsCustomTargetSelectorAndTrimsOuterWhitespace() async throws {
+        let (webView, session) = try await makeSession(html: """
+            <section id="options">
+              <div role="option" onclick="document.body.dataset.selected='south'"> 남향 </div>
+              <div role="option" onclick="document.body.dataset.selected='south-east'">남동향</div>
+            </section>
+            """)
+        try await session.clickElement(
+            matchingText: "남향",
+            in: "#options",
+            elementSelector: "[role=option]"
+        )
+        #expect(try await webView.evaluateJavaScript("document.body.dataset.selected") as? String == "south")
+    }
+
     @Test func clicksDynamicallyCreatedSeedStyleOption() async throws {
         let (webView, session) = try await makeSession(html: """
             <div class="seed-field" id="sales-type">

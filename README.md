@@ -18,12 +18,18 @@ try await session.attachImages(
     to: "input[type=file][name=photos]"
 )
 try await session.click("button[name=next]")
+try await session.clickElement(
+    matchingText: "오픈형 원룸",
+    in: "#sales-type-field"
+)
 
 let title = try await session.value(of: "input[name=title]")
 let matches = try await session.matchesValue("Sunny studio", at: "input[name=title]")
 ```
 
 The operations are `async`, main-actor isolated, and throw `DOMError` on failure. Selectors must match exactly one element. `waitForElement` waits for at least one match without a fixed sleep. `fill`, `select`, and `setChecked` verify the resulting DOM state.
+
+`clickElement(matchingText:in:elementSelector:timeout:)` finds exactly one container, then clicks an element inside it whose `textContent` matches after trimming surrounding whitespace. It defaults to `button` elements; pass another CSS `elementSelector` for a different control. If the target has not appeared, it observes that container until it appears or the timeout expires. Missing or duplicate containers, duplicate matching targets, invalid selectors, and timeouts produce distinct `DOMError` cases. For Seed-style dropdowns, click the trigger first, then call this method on the field container. A click does not by itself prove that the site's framework accepted the selection; inspect a site-specific state change afterward.
 
 ### SwiftUI example
 
@@ -76,9 +82,19 @@ Use `WKWebsiteDataStore.default()` (the default for `WKWebView`) when you want n
 - `attachImages` creates browser `File` objects from image bytes, assigns them to a native `<input type="file">`, dispatches `input`/`change`, and checks file metadata. The caller supplies the image bytes, for example from PhotosPicker. More than one image requires a `multiple` file input.
 - A JavaScript or navigation failure becomes `executionFailed`. The app should wait for the correct page before invoking the session and re-check after navigation.
 
-The package does not navigate particular sites, automate custom Radix-style dropdowns, access cross-origin iframe DOM, or submit forms. It attaches images to native file inputs but does not guarantee upload to a server. Some sites require a genuine user-initiated file selection, reject untrusted events, or use custom upload components; those flows need site-specific handling. Site-specific selectors, conditional input order, and value mapping belong in an app-level adapter. A DOM value match does not by itself prove that a site's framework or server accepted a change.
+The package does not navigate particular sites, know their dropdown structure, access cross-origin iframe DOM, or submit forms. It attaches images to native file inputs but does not guarantee upload to a server. Some sites require a genuine user-initiated file selection, reject untrusted events, or use custom upload components; those flows need site-specific handling. Site-specific selectors, conditional input order, and value mapping belong in an app-level adapter. A DOM value match does not by itself prove that a site's framework or server accepted a change.
 
-Run the macOS integration tests with `swift test`. They load a real `WKWebView` and cover text/event dispatch, select, checkbox, click, image file inputs, dynamic elements, and error cases. They require a macOS environment that permits WebKit's web content process. iOS WebKit behavior and real-site uploads still require separate device/site testing.
+## Tests
+
+The same Swift Testing suite loads a real `WKWebView` on macOS and iOS. It covers text/event dispatch, select, checkbox, click, scoped text click, Seed-style dynamically created options, image file inputs, dynamic elements, and error cases.
+
+```sh
+cd WebKitDOM
+swift test
+xcodebuild test -scheme WebKitDOM -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
+```
+
+The iOS Simulator run passed all 10 tests on an iPhone 17 simulator with iOS 26.5 (2026-09-14). This does not establish behavior on iOS 15, physical devices, or live real-estate sites; those require separate testing. The macOS test run requires an environment that permits WebKit's web content process.
 
 ## Requirements
 
