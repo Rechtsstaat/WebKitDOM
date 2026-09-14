@@ -29,6 +29,35 @@ let matches = try await session.matchesValue("Sunny studio", at: "input[name=tit
 
 The operations are `async`, main-actor isolated, and throw `DOMError` on failure. Selectors must match exactly one element. `waitForElement` waits for at least one match without a fixed sleep. `fill`, `select`, and `setChecked` verify the resulting DOM state.
 
+### Diagnostic logging
+
+By default, `DOMSession` writes failures to Unified Logging with subsystem `WebKitDOM` and category `DOM`. Set `minimumLogLevel: .debug` to see the start and success of each operation too. Each event includes an operation name, phase, correlation ID, elapsed milliseconds after completion, and an error code on failure. The thrown `DOMError` is unchanged.
+
+```swift
+let dom = DOMSession(webView: webView, minimumLogLevel: .debug)
+// Filter Console.app or Xcode logs by subsystem "WebKitDOM".
+```
+
+An app can receive the same structured events through `DOMEventLogger`, or pass `logger: nil` to disable logging:
+
+```swift
+@MainActor
+final class AppDOMLogger: DOMEventLogger {
+    func log(_ event: DOMLogEvent) {
+        // Forward to the app's logging or diagnostics system.
+        print("\(event.id) \(event.operation.rawValue) \(event.phase.rawValue)")
+    }
+}
+
+let dom = DOMSession(
+    webView: webView,
+    logger: AppDOMLogger(),
+    minimumLogLevel: .debug
+)
+```
+
+Selectors are omitted by default because a CSS selector can contain private data. Only set `includeSelectorsInLogs: true` after reviewing the selectors used by your app. Form values, image bytes, cookie contents, page URLs, and raw JavaScript error descriptions are never included in `DOMLogEvent`. Debug logging may be more verbose, so leave the default `.error` level in release builds unless diagnostics require otherwise.
+
 `clickElement(matchingText:in:elementSelector:timeout:)` finds exactly one container, then clicks an element inside it whose `textContent` matches after trimming surrounding whitespace. It defaults to `button` elements; pass another CSS `elementSelector` for a different control. If the target has not appeared, it observes that container until it appears or the timeout expires. Missing or duplicate containers, duplicate matching targets, invalid selectors, and timeouts produce distinct `DOMError` cases. For Seed-style dropdowns, click the trigger first, then call this method on the field container. A click does not by itself prove that the site's framework accepted the selection; inspect a site-specific state change afterward.
 
 ### SwiftUI example
@@ -94,7 +123,7 @@ swift test
 xcodebuild test -scheme WebKitDOM -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 ```
 
-The iOS Simulator run passed all 10 tests on an iPhone 17 simulator with iOS 26.5 (2026-09-14). This does not establish behavior on iOS 15, physical devices, or live real-estate sites; those require separate testing. The macOS test run requires an environment that permits WebKit's web content process.
+The iOS Simulator run passed all 14 tests on an iPhone 17 simulator with iOS 26.5 (2026-09-14). The tests include logger correlation, failure codes, privacy defaults, opt-in selectors, and disabled logging. This does not establish behavior on iOS 15, physical devices, or live real-estate sites; those require separate testing. The macOS test run requires an environment that permits WebKit's web content process.
 
 ## Requirements
 
