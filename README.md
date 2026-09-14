@@ -27,9 +27,20 @@ The SwiftUI Observation example below requires iOS 17+, but the package API does
 
 ## Installation
 
-The current repository keeps `Package.swift` in a nested `WebKitDOM/` directory, so its GitHub URL is **not yet a conventional remote Swift Package dependency**. Do not paste the repository URL into Xcode and expect a versioned package to resolve. A root-level manifest and release tag are needed before documenting remote installation.
+In Xcode, choose **File → Add Package Dependencies**, enter `https://github.com/Rechtsstaat/WebKitDOM.git`, select version **0.1.0 or later**, and add the `WebKitDOM` product to your app target. Then `import WebKitDOM`.
 
-For development, clone the repository, choose **File → Add Package Dependencies → Add Local** in Xcode, and select the inner `WebKitDOM/` directory containing `Package.swift`. Add its `WebKitDOM` product to your app target, then `import WebKitDOM`.
+For a Swift package that consumes WebKitDOM:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/Rechtsstaat/WebKitDOM.git", from: "0.1.0")
+],
+targets: [
+    .target(name: "YourAppModule", dependencies: ["WebKitDOM"])
+]
+```
+
+For local development, clone this repository and choose **File → Add Package Dependencies → Add Local** in Xcode. Select the **repository root** containing `Package.swift`, not the inner source directory. You can also use `.package(path: "/path/to/WebKitDOM")` from another local Swift package.
 
 ## Quick start
 
@@ -229,7 +240,6 @@ Some sites require a genuine user-initiated file selection, reject untrusted eve
 The same Swift Testing suite loads a real `WKWebView` on macOS and iOS. It covers text/event dispatch, select, checkbox, click, scoped text click, Seed-style dynamically created options, image file inputs, dynamic elements, and error cases.
 
 ```sh
-cd WebKitDOM
 swift test
 xcodebuild test -scheme WebKitDOM -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 ```
