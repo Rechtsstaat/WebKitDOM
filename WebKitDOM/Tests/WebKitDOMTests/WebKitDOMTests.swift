@@ -108,6 +108,64 @@ struct WebKitDOMTests {
         }
     }
 
+    @Test func clicksExactTextOnlyInsideContainer() async throws {
+        let (webView, session) = try await makeSession(html: """
+            <section id="outside"><button onclick="document.body.dataset.clicked='outside'">원룸</button></section>
+            <section id="listing">
+              <button onclick="document.body.dataset.clicked='inside'">원룸</button>
+              <button onclick="document.body.dataset.clicked='wrong'">분리형 원룸</button>
+            </section>
+            """)
+        try await session.clickElement(matchingText: "원룸", in: "#listing")
+        #expect(try await webView.evaluateJavaScript("document.body.dataset.clicked") as? String == "inside")
+    }
+
+    @Test func clicksDynamicallyCreatedSeedStyleOption() async throws {
+        let (webView, session) = try await makeSession(html: """
+            <div class="seed-field" id="sales-type">
+              <button name="salesType"></button>
+            </div>
+            <script>
+              document.querySelector('[name=salesType]').addEventListener('click', () => {
+                setTimeout(() => {
+                  const option = document.createElement('button');
+                  option.textContent = '오픈형 원룸';
+                  option.addEventListener('click', () => document.body.dataset.selected = 'studio');
+                  document.querySelector('#sales-type').append(option);
+                }, 50);
+              });
+            </script>
+            """)
+        try await session.click("button[name=salesType]")
+        try await session.clickElement(matchingText: "오픈형 원룸", in: "#sales-type", timeout: 2)
+        #expect(try await webView.evaluateJavaScript("document.body.dataset.selected") as? String == "studio")
+    }
+
+    @Test func reportsScopedTextClickErrors() async throws {
+        let (_, session) = try await makeSession(html: """
+            <section class="group"><button>주택</button><button>주택</button></section>
+            <section class="group"><button>아파트</button></section>
+            """)
+        await #expect(throws: DOMError.invalidSelector("[")) {
+            try await session.clickElement(matchingText: "주택", in: "[")
+        }
+        await #expect(throws: DOMError.invalidSelector("[")) {
+            try await session.clickElement(matchingText: "주택", in: ".group:first-child", elementSelector: "[")
+        }
+        await #expect(throws: DOMError.elementNotFound("#missing")) {
+            try await session.clickElement(matchingText: "주택", in: "#missing")
+        }
+        await #expect(throws: DOMError.ambiguousSelector(".group")) {
+            try await session.clickElement(matchingText: "주택", in: ".group")
+        }
+        await #expect(throws: DOMError.ambiguousSelector("주택")) {
+            try await session.clickElement(matchingText: "주택", in: ".group:first-child")
+        }
+        await #expect(throws: DOMError.timedOut("빌라")) {
+            try await session.clickElement(matchingText: "빌라", in: ".group:first-child", timeout: 0.05)
+        }
+    }
+
     private func makeSession(html: String) async throws -> (WKWebView, DOMSession) {
         let webView = WKWebView()
         let loader = PageLoader()
