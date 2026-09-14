@@ -1,35 +1,108 @@
 # WebKitDOM
-A Swift package for interacting with and verifying DOM elements in WKWebView.
 
-WebKitDOM works with a `WKWebView` your app already owns. It does not create a web view, navigate to a site, or store login credentials. The app remains responsible for the web view's `WKWebsiteDataStore` and cookie policy.
+Control and verify DOM elements in an existing `WKWebView` from Swift. Fill a form, choose a native option, click a dynamically rendered button, or attach images without building a new web-view wrapper.
 
-## Public API
+WebKitDOM is a low-level Swift Package, not a site automation service. Your app owns navigation, authentication, the `WKWebView`, and the decision to submit a form.
 
-`DOMSession` wraps an existing `WKWebView`. The app owns the web view and its navigation; the package handles small, verifiable DOM operations.
+## Contents
 
-```swift
-let session = DOMSession(webView: webView)
-try await session.waitForElement("input[name=title]")
-try await session.fill("input[name=title]", with: "Sunny studio")
-try await session.select("select[name=direction]", value: "SOUTH")
-try await session.setChecked("input[name=parking]", to: true)
-try await session.attachImages(
-    [DOMImage(data: photoData, fileName: "room.jpg", mimeType: "image/jpeg")],
-    to: "input[type=file][name=photos]"
-)
-try await session.click("button[name=next]")
-try await session.clickElement(
-    matchingText: "오픈형 원룸",
-    in: "#sales-type-field"
-)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Common operations](#common-operations)
+- [SwiftUI integration](#swiftui-integration)
+- [Diagnostics](#diagnostics)
+- [Errors and verification](#errors-and-verification)
+- [Integration notes](#integration-notes)
+- [What it does not do](#what-it-does-not-do)
+- [Tests](#tests)
 
-let title = try await session.value(of: "input[name=title]")
-let matches = try await session.matchesValue("Sunny studio", at: "input[name=title]")
+## Requirements
+
+- iOS 15+ or macOS 12+
+- Swift 6 and WebKit
+- An existing `WKWebView` with a loaded main document you can interact with
+
+The SwiftUI Observation example below requires iOS 17+, but the package API does not.
+
+## Installation
+
+The current repository keeps `Package.swift` in a nested `WebKitDOM/` directory, so its GitHub URL is **not yet a conventional remote Swift Package dependency**. Do not paste the repository URL into Xcode and expect a versioned package to resolve. A root-level manifest and release tag are needed before documenting remote installation.
+
+For development, clone the repository, choose **File → Add Package Dependencies → Add Local** in Xcode, and select the inner `WebKitDOM/` directory containing `Package.swift`. Add its `WebKitDOM` product to your app target, then `import WebKitDOM`.
+
+## Quick start
+
+Load this small form in your app's `WKWebView` (or use a page with equivalent selectors):
+
+```html
+<input id="title" type="text">
+<select id="direction">
+  <option value="N">North</option>
+  <option value="S">South</option>
+</select>
+<input id="parking" type="checkbox">
+<button id="next" type="button">Next</button>
 ```
 
-The operations are `async`, main-actor isolated, and throw `DOMError` on failure. Selectors must match exactly one element. `waitForElement` waits for at least one match without a fixed sleep. `fill`, `select`, and `setChecked` verify the resulting DOM state.
+After the page finishes loading, create a session from **that same web view**:
 
-### Diagnostic logging
+```swift
+import WebKit
+import WebKitDOM
+
+let dom = DOMSession(webView: webView)
+try await dom.waitForElement("#title")
+try await dom.fill("#title", with: "Sunny studio")
+try await dom.select("#direction", value: "S")
+try await dom.setChecked("#parking", to: true)
+
+let title = try await dom.value(of: "#title")
+assert(title == "Sunny studio")
+try await dom.click("#next")
+```
+
+Call the `@MainActor` API from a main-actor context, such as a SwiftUI action or an `@MainActor` model. A DOM value match confirms the page value, not that a site's framework or server accepted it.
+
+## Common operations
+
+| API | Use it for | Important limit |
+| --- | --- | --- |
+| `waitForElement(_:timeout:)` | Wait for a selector to appear | Waits for at least one match |
+| `fill(_:with:)` | Text inputs and textareas | Not file, checkbox, radio, or hidden inputs |
+| `select(_:value:)` | Native `<select>` | Does not operate a Radix/Seed custom dropdown |
+| `setChecked(_:to:)` | Native checkbox and radio | A radio cannot be directly unchecked |
+| `click(_:)` | One element by CSS selector | May trigger navigation or submission |
+| `clickElement(matchingText:in:elementSelector:timeout:)` | A text-labeled option inside one container | Defaults to buttons; trims outer whitespace |
+| `attachImages(_:to:)` | Native `<input type="file">` | DOM attachment is not server upload |
+| `value(of:)`, `matchesValue(_:at:)` | Read and compare a DOM value | Framework state may differ |
+
+### Dynamic dropdown example
+
+For a custom dropdown, click its trigger first. The option must be found in the **container where the site renders it**; a portal may be outside the trigger's parent.
+
+```swift
+try await dom.click("#property-type-trigger")
+try await dom.clickElement(
+    matchingText: "Studio",
+    in: "#property-type-options",
+    elementSelector: "[role=option]",
+    timeout: 5
+)
+```
+
+The selectors above are illustrative, not selectors for a specific real-estate site. If two matching options exist in the container, the call throws instead of guessing. Verify the site's selected state after clicking.
+
+### Image input example
+
+```swift
+let photo = DOMImage(data: jpegData, fileName: "room.jpg", mimeType: "image/jpeg")
+try await dom.attachImages([photo], to: "input[type=file][name=photos]")
+```
+
+For multiple images, pass multiple `DOMImage` values and target an input with the `multiple` attribute. WebKitDOM creates browser `File` objects, dispatches `input` and `change`, and checks their names, MIME types, and sizes. Your app must provide image bytes, for example from PhotosPicker. Sites may impose additional format, file-size, count, or user-gesture requirements.
+
+## Diagnostics
 
 By default, `DOMSession` writes failures to Unified Logging with subsystem `WebKitDOM` and category `DOM`. Set `minimumLogLevel: .debug` to see the start and success of each operation too. Each event includes an operation name, phase, correlation ID, elapsed milliseconds after completion, and an error code on failure. The thrown `DOMError` is unchanged.
 
@@ -58,9 +131,7 @@ let dom = DOMSession(
 
 Selectors are omitted by default because a CSS selector can contain private data. Only set `includeSelectorsInLogs: true` after reviewing the selectors used by your app. Form values, image bytes, cookie contents, page URLs, and raw JavaScript error descriptions are never included in `DOMLogEvent`. Debug logging may be more verbose, so leave the default `.error` level in release builds unless diagnostics require otherwise.
 
-`clickElement(matchingText:in:elementSelector:timeout:)` finds exactly one container, then clicks an element inside it whose `textContent` matches after trimming surrounding whitespace. It defaults to `button` elements; pass another CSS `elementSelector` for a different control. If the target has not appeared, it observes that container until it appears or the timeout expires. Missing or duplicate containers, duplicate matching targets, invalid selectors, and timeouts produce distinct `DOMError` cases. For Seed-style dropdowns, click the trigger first, then call this method on the field container. A click does not by itself prove that the site's framework accepted the selection; inspect a site-specific state change afterward.
-
-### SwiftUI example
+## SwiftUI integration
 
 Keep the same `WKWebView` instance while presenting and dismissing its SwiftUI wrapper. Create the session from that instance after the page has loaded. This example uses Observation and therefore requires iOS 17 or later; the package itself supports iOS 15 or later:
 
@@ -103,7 +174,9 @@ struct ListingPage: UIViewRepresentable {
 
 Use `WKWebsiteDataStore.default()` (the default for `WKWebView`) when you want normal persistent website data; a nonpersistent data store will not retain cookies across sessions. Keeping the same web view also preserves the currently loaded page when SwiftUI redraws the wrapper. Login persistence across app launches still depends on each site's cookie lifetime and login policy.
 
-### Error and verification behavior
+`ListingPage` only displays the supplied web view. Load the target URL or HTML and observe navigation in the host app before calling `fillListing()`. The example selectors describe an example form, not a supported website.
+
+## Errors and verification
 
 - Invalid, missing, and non-unique CSS selectors have distinct `DOMError` cases.
 - `fill` supports text inputs and textareas, `select` supports native `<select>`, and `setChecked` supports checkboxes and radio buttons.
@@ -111,7 +184,45 @@ Use `WKWebsiteDataStore.default()` (the default for `WKWebView`) when you want n
 - `attachImages` creates browser `File` objects from image bytes, assigns them to a native `<input type="file">`, dispatches `input`/`change`, and checks file metadata. The caller supplies the image bytes, for example from PhotosPicker. More than one image requires a `multiple` file input.
 - A JavaScript or navigation failure becomes `executionFailed`. The app should wait for the correct page before invoking the session and re-check after navigation.
 
-The package does not navigate particular sites, know their dropdown structure, access cross-origin iframe DOM, or submit forms. It attaches images to native file inputs but does not guarantee upload to a server. Some sites require a genuine user-initiated file selection, reject untrusted events, or use custom upload components; those flows need site-specific handling. Site-specific selectors, conditional input order, and value mapping belong in an app-level adapter. A DOM value match does not by itself prove that a site's framework or server accepted a change.
+Handle expected failures explicitly in the host app:
+
+```swift
+do {
+    try await dom.fill("#title", with: "Sunny studio")
+} catch DOMError.elementNotFound(let selector) {
+    // The page may not be ready, or the site's markup may have changed.
+    print("Missing element: \(selector)")
+} catch DOMError.ambiguousSelector(let selector) {
+    // Narrow the CSS selector before retrying.
+    print("More than one element: \(selector)")
+} catch {
+    // Preserve the error for the app's own diagnostics or UI.
+    print(error)
+}
+```
+
+`fill`, `select`, and `attachImages` read back the immediate DOM result. They cannot prove that a React state update, validation rule, preview, network request, or server save succeeded. Check a page-specific confirmation signal before treating an operation as complete. If a site reformats a value (for example `6545` into `6,545`), compare a normalized value in the site adapter rather than relying on `matchesValue`'s exact string comparison.
+
+## Integration notes
+
+The following is an assessment of local registration-form research captured on **2026-09-08**, not a claim of verified live-site support:
+
+| Site | What existing APIs can cover | What still needs site-specific work |
+| --- | --- | --- |
+| Zigbang | Text and checkbox inputs; Radix trigger `click` followed by `clickElement` on a portal `[role=listbox]` with `elementSelector: "[role=option]"`; a native file input inside the image dialog may accept `attachImages` | Never write the hidden Radix `<select>` mirror; identify the right trigger/listbox, map values to visible text, confirm state, handle address popup and cross-origin iframe, and verify image upload/server acceptance |
+| Dabang | Native `<select>` controls through `select`; basic inputs and checkboxes; text-labeled buttons through `clickElement` | Many fields lack stable IDs/names and need a row-title-based locator that this package does not provide; address popup and cross-origin iframe require another route; photo input markup and upload completion need live verification |
+
+Neither site has been exercised by this package against a live registration page. The research also found conditional fields and value transformations, so an app-level adapter must choose the order, re-query after page changes, normalize values, and verify each step. In particular, Zigbang's address field is read-only and its hidden Radix `<select>` is a mirror, while Dabang identifies many controls by `<tr>` heading text rather than stable CSS selectors.
+
+## What it does not do
+
+- Create or navigate a `WKWebView`, sign in, or manage cookies for the host app.
+- Target iframe DOM (including same-origin frames) or control a separate popup window; operations currently run in the main document only.
+- Know a website's selectors, field dependencies, value mapping, or validation rules.
+- Guarantee that a programmatically attached file is uploaded or accepted by the server.
+- Submit a form unless the host app explicitly calls `click` on a submit control.
+
+Some sites require a genuine user-initiated file selection, reject untrusted events, or use custom upload components. Those flows require a site-specific approach rather than an assumption that DOM attachment is enough.
 
 ## Tests
 
@@ -124,8 +235,3 @@ xcodebuild test -scheme WebKitDOM -destination 'platform=iOS Simulator,name=iPho
 ```
 
 The iOS Simulator run passed all 14 tests on an iPhone 17 simulator with iOS 26.5 (2026-09-14). The tests include logger correlation, failure codes, privacy defaults, opt-in selectors, and disabled logging. This does not establish behavior on iOS 15, physical devices, or live real-estate sites; those require separate testing. The macOS test run requires an environment that permits WebKit's web content process.
-
-## Requirements
-
-- iOS 15 or later, macOS 12 or later
-- Swift 6
